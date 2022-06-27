@@ -17,9 +17,25 @@ fn exit(code: u8) -> ! {
     }
 }
 
+fn print(s: &str) {
+    const SYSCALL_WRITE: u64 = 1;
+    const STDOUT: u64 = 1;
+    let s = s.as_bytes();
+    unsafe {
+        asm!(
+            "syscall",
+            in("rax") SYSCALL_WRITE,
+            in("rdi") STDOUT,
+            in("rsi") s.as_ptr() as u64,
+            in("rdx") s.len() as u64,
+        )
+    }
+}
+
 #[no_mangle]
 fn _start() {
-    exit(2);
+    print("Hello, world!");
+    exit(0);
 }
 
 #[panic_handler]
