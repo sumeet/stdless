@@ -10,12 +10,39 @@ const AF_INET: i32 = 2;
 
 type SocklenT = u32;
 
-const RESP: &'static [u8] = br#"HTTP/1.0 200 OK
-Content-type: text/plain; charset=ASCII
-Content-Length: 12
+const PAYLOAD: &'static str = r#"<marquee>Hello, Web!</marquee>"#;
 
-Hello, Web!
-"#;
+fn write_num(fd: i32, mut num: usize) {
+    if num == 0 {
+        return write(fd, &[b'0']);
+    }
+    const BUFFER_SIZE: usize = 10;
+    let mut buffer: [u8; BUFFER_SIZE] = [0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut i = BUFFER_SIZE;
+    while num > 0 {
+        if i == 0 {
+            panic!("overflowed buffer for content length");
+        } else {
+            i -= 1;
+        }
+
+        let this_digit = (num % 10) as u8;
+        num /= 10;
+        buffer[i] = this_digit + b'0';
+    }
+    write(fd, &buffer[i..BUFFER_SIZE]);
+}
+
+fn write_http_resp_header(fd: i32, len: usize) {
+    write(
+        fd,
+        br#"HTTP/1.0 200 OK
+Content-type: text/html; charset=UTF-8
+Content-Length: "#,
+    );
+    write_num(fd, len);
+    write(fd, b"\n\n");
+}
 
 #[no_mangle]
 fn _start() {
@@ -26,9 +53,9 @@ fn _start() {
     listen(fd);
     loop {
         let conn_fd = accept(fd);
-        write(conn_fd, RESP);
+        write_http_resp_header(conn_fd, PAYLOAD.len());
+        write(conn_fd, PAYLOAD.as_bytes());
         print("Send response to client who connected\n");
-        exit(0);
     }
 }
 
@@ -141,8 +168,11 @@ fn write(fd: i32, s: &[u8]) {
         asm!(
         "syscall",
         in("rax") SYSCALL_WRITE,
+        // argument #1
         in("rdi") fd,
+        // argument #2
         in("rsi") s.as_ptr() as u64,
+        // argument #2
         in("rdx") s.len() as u64,
         )
     }
@@ -154,6 +184,20 @@ fn print(s: &str) {
 }
 
 #[panic_handler]
-fn panic(_panic: &PanicInfo<'_>) -> ! {
-    loop {}
+fn panic(panic_info: &PanicInfo<'_>) -> ! {
+    // TODO: print out panic.location.file, line_number, etc.
+    const STDERR: i32 = 2;
+    write(STDERR, b"\n\n\npanic! at ");
+    match panic_info.location() {
+        None => {}
+        Some(loc) => {
+            write(STDERR, loc.file().as_bytes());
+            write(STDERR, b":");
+            write_num(STDERR, loc.line() as _);
+            write(STDERR, b":");
+            write_num(STDERR, loc.column() as _);
+            write(STDERR, b"\n");
+        }
+    }
+    exit(1);
 }
