@@ -10,8 +10,10 @@
 //         Call the "syscall" instruction
 // |
 // |
+// | std
 // -> libc (C standard library) communicate with the operating system and with the hardware
 //        -> Kernel (Linux)
+//   malloc,memcpy,memset
 
 use core::arch::asm;
 use core::mem::size_of;
@@ -30,6 +32,7 @@ fn write_num(fd: i32, mut num: usize) {
     }
     const BUFFER_SIZE: usize = 10;
     let mut buffer: [u8; BUFFER_SIZE] = [0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    // let mut buffer: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
     let mut i = BUFFER_SIZE;
     while num > 0 {
         if i == 0 {
@@ -298,7 +301,7 @@ fn accept(fd: i32) -> i32 {
 }
 
 fn htons(port: u16) -> u16 {
-    unsafe { core::mem::transmute(port.to_be_bytes()) }
+    port.to_be()
 }
 
 fn bind(fd: i32, port: u16) {
