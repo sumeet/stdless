@@ -25,7 +25,7 @@ const STDOUT: i32 = 1;
 
 type SocklenT = u32;
 
-const FILE_NAME: &'static str = "index.htm";
+const ROOT_INDEX: &'static [u8] = b"index.htm";
 
 // LLVM depends on these functions, so we need these or else we get linker errors
 #[no_mangle]
@@ -69,10 +69,19 @@ fn write_num(fd: i32, mut num: usize) {
     write(fd, &buffer[i..BUFFER_SIZE]);
 }
 
-fn write_http_resp_from_filename(out_fd: i32, filename: &str) {
+const NOT_FOUND_MSG: &[u8] = b"<marquee>404 Page Not Found</marquee>";
+
+fn write_http_resp_from_filename(out_fd: i32, filename: &[u8]) {
     let fd = open(filename);
+    if fd.is_none() {
+        write_http_resp_header(out_fd, 404, NOT_FOUND_MSG.len());
+        write(out_fd, NOT_FOUND_MSG);
+        return;
+    }
+
+    let fd = fd.unwrap();
     let stats = fstat(fd);
-    write_http_resp_header(out_fd, stats.st_size as _);
+    write_http_resp_header(out_fd, 200, stats.st_size as _);
 
     let mut buf: [u8; 32] = [0u8; 32];
     loop {
@@ -127,11 +136,11 @@ fn close(fd: i32) {
     }
 }
 
-fn open(path: &str) -> i32 {
+fn open(path: &[u8]) -> Option<i32> {
     // converting a rust string into a c string
     const BUFFER_SIZE: usize = 1024;
     let mut buffer: [u8; BUFFER_SIZE] = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
-    let path_bytes = path.as_bytes();
+    let path_bytes = path;
     if path_bytes.len() + 1 > BUFFER_SIZE {
         panic!("path is too long");
     }
@@ -157,9 +166,10 @@ fn open(path: &str) -> i32 {
     }
 
     if fd < 0 {
-        panic!("open failed");
+        None
+    } else {
+        Some(fd)
     }
-    fd
 }
 
 // copilot wrote this struct, we can grab the size, not sure if it's even the correct size
@@ -224,15 +234,40 @@ fn fstat(fd: i32) -> Stat {
     stat
 }
 
-fn write_http_resp_header(fd: i32, len: usize) {
+fn write_http_resp_header(fd: i32, code: usize, len: usize) {
+    write(fd, br#"HTTP/1.0 "#);
+    write_num(fd, code);
     write(
         fd,
-        br#"HTTP/1.0 200 OK
+        br#" OK
 Content-type: text/html; charset=UTF-8
 Content-Length: "#,
     );
     write_num(fd, len);
     write(fd, b"\n\n");
+}
+
+fn extract_path_from_http_req(req: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while req[i] != b' ' {
+        i += 1;
+    }
+
+    #[allow(unused)]
+    let request_method = &req[0..i];
+
+    // skip the next char which is a space
+    i += 1;
+
+    // skip the leading / in the request, because that won't map to the filesystem
+    if req[i] == b'/' {
+        i += 1;
+    }
+    let start_of_path = i;
+    while req[i] != b' ' && i < req.len() - 2 {
+        i += 1;
+    }
+    &req[start_of_path..i]
 }
 
 #[no_mangle]
@@ -245,9 +280,25 @@ fn _start() {
     let fd = tcp_socket();
     bind(fd, PORT);
     listen(fd);
+    // main web request loop
     loop {
         let conn_fd = accept(fd);
-        write_http_resp_from_filename(conn_fd, FILE_NAME);
+
+        // parse the request
+        const REQ_BUF_SIZE: usize = 1024;
+        let mut req_buf: [u8; REQ_BUF_SIZE] =
+            unsafe { core::mem::MaybeUninit::uninit().assume_init() };
+        let num_bytes_read = read(conn_fd, &mut req_buf);
+        let req = &req_buf[..num_bytes_read as _];
+        let requested_path = extract_path_from_http_req(req);
+
+        write(STDOUT, b"Read ");
+        write_num(STDOUT, num_bytes_read as _);
+        write(STDOUT, b" bytes:\n");
+        write(STDOUT, &req_buf[..num_bytes_read as _]);
+        // end of parse the request
+
+        write_http_resp_from_filename(conn_fd, requested_path);
         print("Send response to client who connected\n");
     }
 }
