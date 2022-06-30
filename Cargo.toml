@@ -16,3 +16,9 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+# This could work for solving missing libc dependencies that LLVM wants, BUT
+# as a learning experience, we'll be implementing them ourselves in this repo.
+#[dependencies.compiler_builtins]
+#version = "*"
+#features = ["mem"]
