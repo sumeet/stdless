@@ -298,7 +298,11 @@ fn _start() {
         write(STDOUT, &req_buf[..num_bytes_read as _]);
         // end of parse the request
 
-        write_http_resp_from_filename(conn_fd, requested_path);
+        if requested_path.is_empty() {
+            write_http_resp_from_filename(conn_fd, ROOT_INDEX);
+        } else {
+            write_http_resp_from_filename(conn_fd, requested_path);
+        }
         print("Send response to client who connected\n");
     }
 }
