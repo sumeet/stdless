@@ -2,11 +2,23 @@
 #![no_std]
 #![no_main]
 
+// Rust standard library (Vec, String, Everything you would want to use...)
+// |-> no_std (Our project right now)
+//      -> Kernel (directly through Syscalls) (Linux)
+//         For a syscall, you dump arguments into registers
+//         You dump a syscall NUMBER into the "RAX" register
+//         Call the "syscall" instruction
+// |
+// |
+// -> libc (C standard library) communicate with the operating system and with the hardware
+//        -> Kernel (Linux)
+
 use core::arch::asm;
 use core::mem::size_of;
 use core::panic::PanicInfo;
 
 const AF_INET: i32 = 2;
+const STDOUT: i32 = 1;
 
 type SocklenT = u32;
 
@@ -246,10 +258,13 @@ Content-Length: "#,
 
 #[no_mangle]
 fn _start() {
-    print("Webserver listening on port 8080...\n");
+    const PORT: u16 = 8080;
+    print("Webserver listening on port ");
+    write_num(STDOUT, PORT as _);
+    print("...\n");
 
     let fd = tcp_socket();
-    bind(fd, 8080);
+    bind(fd, PORT);
     listen(fd);
     loop {
         let conn_fd = accept(fd);
@@ -378,7 +393,6 @@ fn write(fd: i32, s: &[u8]) {
 }
 
 fn print(s: &str) {
-    const STDOUT: i32 = 1;
     write(STDOUT, s.as_bytes());
 }
 
