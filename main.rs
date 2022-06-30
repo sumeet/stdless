@@ -11,19 +11,14 @@
 //         Call the "syscall" instruction
 // |
 // |
-// | std
+// | std (not using this)
 // -> libc (C standard library) communicate with the operating system and with the hardware
 //        -> Kernel (Linux)
 //   malloc,memcpy,memset
 
-use core::arch::asm;
-use core::mem::size_of;
 use core::panic::PanicInfo;
-
-const AF_INET: i32 = 2;
-const STDOUT: i32 = 1;
-
-type SocklenT = u32;
+mod linux;
+use linux::STDOUT;
 
 const ROOT_INDEX: &'static [u8] = b"index.htm";
 
@@ -50,7 +45,7 @@ fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
 
 fn write_num(fd: i32, mut num: usize) {
     if num == 0 {
-        return write(fd, &[b'0']);
+        return linux::write(fd, &[b'0']);
     }
     const BUFFER_SIZE: usize = 10;
     let mut buffer: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
@@ -66,185 +61,46 @@ fn write_num(fd: i32, mut num: usize) {
         num /= 10;
         buffer[i] = this_digit + b'0';
     }
-    write(fd, &buffer[i..BUFFER_SIZE]);
+    linux::write(fd, &buffer[i..BUFFER_SIZE]);
 }
 
 const NOT_FOUND_MSG: &[u8] = b"<marquee>404 Page Not Found</marquee>";
 
 fn write_http_resp_from_filename(out_fd: i32, filename: &[u8]) {
-    let fd = open(filename);
+    let fd = linux::open(filename);
     if fd.is_none() {
         write_http_resp_header(out_fd, 404, NOT_FOUND_MSG.len());
-        write(out_fd, NOT_FOUND_MSG);
+        linux::write(out_fd, NOT_FOUND_MSG);
         return;
     }
 
     let fd = fd.unwrap();
-    let stats = fstat(fd);
+    let stats = linux::fstat(fd);
     write_http_resp_header(out_fd, 200, stats.st_size as _);
 
     let mut buf: [u8; 32] = [0u8; 32];
     loop {
-        let bytes_read = read(fd, &mut buf);
+        let bytes_read = linux::read(fd, &mut buf);
         if bytes_read > 0 {
-            write(out_fd, &buf[..bytes_read as _]);
+            linux::write(out_fd, &buf[..bytes_read as _]);
         } else {
             break;
         }
     }
-    close(fd);
-}
-
-fn read(fd: i32, buf: &mut [u8]) -> u32 {
-    const SYSCALL_READ: u64 = 0;
-    let res: i64;
-    unsafe {
-        //  ssize_t read(int fd, void *buf, size_t count);
-        asm!(
-        "syscall",
-        inout("rax") SYSCALL_READ => res,
-        // argument #1
-        in("rdi") fd,
-        // argument #2
-        in("rsi") buf.as_ptr(),
-        // argument #2
-        in("rdx") buf.len(),
-        )
-    }
-
-    if res < 0 {
-        panic!("read failed");
-    }
-    res as u32
-}
-
-fn close(fd: i32) {
-    const SYSCALL_CLOSE: u64 = 3;
-    let res: i64;
-    unsafe {
-        // int close(int fd);
-        asm!(
-        "syscall",
-        inout("rax") SYSCALL_CLOSE => res,
-        // argument #1
-        in("rdi") fd,
-        )
-    }
-
-    if res < 0 {
-        panic!("close failed");
-    }
-}
-
-fn open(path: &[u8]) -> Option<i32> {
-    // converting a rust string into a c string
-    const BUFFER_SIZE: usize = 1024;
-    let mut buffer: [u8; BUFFER_SIZE] = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
-    let path_bytes = path;
-    if path_bytes.len() + 1 > BUFFER_SIZE {
-        panic!("path is too long");
-    }
-    buffer[0..path_bytes.len()].copy_from_slice(path_bytes);
-    buffer[path.len()] = 0;
-
-    let fd: i32;
-    let filepath_cstr = &buffer as *const u8;
-
-    const SYSCALL_OPEN: i32 = 2;
-    const O_RDONLY: i32 = 0;
-
-    unsafe {
-        // int open(char *file, int omode)
-        asm!(
-        "syscall",
-        inout("rax") SYSCALL_OPEN => fd,
-        // argument #1
-        in("rdi") filepath_cstr,
-        // argument #2
-        in("rsi") O_RDONLY,
-        )
-    }
-
-    if fd < 0 {
-        None
-    } else {
-        Some(fd)
-    }
-}
-
-// copilot wrote this struct, we can grab the size, not sure if it's even the correct size
-// so maybe fstat is like writing into garbage memory because the struct isn't big enough
-#[repr(C)]
-struct Stat {
-    st_dev: u64,
-    st_ino: u64,
-    st_mode: u32,
-    st_nlink: u64,
-    st_uid: u32,
-    st_gid: u32,
-    st_rdev: u64,
-    st_size: i64,
-    st_blksize: u64,
-    st_blocks: u64,
-    st_atime: u64,
-    st_atime_nsec: u64,
-    st_mtime: u64,
-    st_mtime_nsec: u64,
-    st_ctime: u64,
-    st_ctime_nsec: u64,
-}
-
-// fstat => 5
-fn fstat(fd: i32) -> Stat {
-    const SYSCALL_FSTAT: i32 = 5;
-    let mut stat: Stat = Stat {
-        st_dev: 0,
-        st_ino: 0,
-        st_mode: 0,
-        st_nlink: 0,
-        st_uid: 0,
-        st_gid: 0,
-        st_rdev: 0,
-        st_size: 0,
-        st_blksize: 0,
-        st_blocks: 0,
-        st_atime: 0,
-        st_atime_nsec: 0,
-        st_mtime: 0,
-        st_mtime_nsec: 0,
-        st_ctime: 0,
-        st_ctime_nsec: 0,
-    };
-    let mut res: i32;
-    unsafe {
-        // int fstat(int fd, struct stat *buf)
-        asm!(
-        "syscall",
-        inout("rax") SYSCALL_FSTAT => res,
-        // argument #1
-        in("rdi") fd,
-        // argument #2
-        in("rsi") &mut stat as *mut Stat,
-        )
-    }
-
-    if res < 0 {
-        panic!("stat failed");
-    }
-    stat
+    linux::close(fd);
 }
 
 fn write_http_resp_header(fd: i32, code: usize, len: usize) {
-    write(fd, br#"HTTP/1.0 "#);
+    linux::write(fd, br#"HTTP/1.0 "#);
     write_num(fd, code);
-    write(
+    linux::write(
         fd,
         br#" OK
 Content-type: text/html; charset=UTF-8
 Content-Length: "#,
     );
     write_num(fd, len);
-    write(fd, b"\n\n");
+    linux::write(fd, b"\n\n");
 }
 
 fn extract_path_from_http_req(req: &[u8]) -> &[u8] {
@@ -277,25 +133,25 @@ fn _start() {
     write_num(STDOUT, PORT as _);
     print("...\n");
 
-    let fd = tcp_socket();
-    bind(fd, PORT);
-    listen(fd);
+    let fd = linux::tcp_socket();
+    linux::bind(fd, PORT);
+    linux::listen(fd);
     // main web request loop
     loop {
-        let conn_fd = accept(fd);
+        let conn_fd = linux::accept(fd);
 
         // parse the request
         const REQ_BUF_SIZE: usize = 1024;
         let mut req_buf: [u8; REQ_BUF_SIZE] =
             unsafe { core::mem::MaybeUninit::uninit().assume_init() };
-        let num_bytes_read = read(conn_fd, &mut req_buf);
+        let num_bytes_read = linux::read(conn_fd, &mut req_buf);
         let req = &req_buf[..num_bytes_read as _];
         let requested_path = extract_path_from_http_req(req);
 
-        write(STDOUT, b"Read ");
+        linux::write(STDOUT, b"Read ");
         write_num(STDOUT, num_bytes_read as _);
-        write(STDOUT, b" bytes:\n");
-        write(STDOUT, &req_buf[..num_bytes_read as _]);
+        linux::write(STDOUT, b" bytes:\n");
+        linux::write(STDOUT, &req_buf[..num_bytes_read as _]);
         // end of parse the request
 
         if requested_path.is_empty() {
@@ -307,144 +163,29 @@ fn _start() {
     }
 }
 
-fn accept(fd: i32) -> i32 {
-    const SYSCALL_ACCEPT: i32 = 43;
-    let sockaddr_in = SockaddrIn {
-        sin_family: 0,
-        sin_port: 0,
-        sin_addr: 0,
-        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0],
-    };
-    let sockaddr_in_ptr = &sockaddr_in as *const SockaddrIn;
-    let sizeof_sockaddr_in = size_of::<SockaddrIn>() as SocklenT;
-    let sizeof_sockaddr_in_ptr = &sizeof_sockaddr_in as *const SocklenT;
-    let mut ret;
-    unsafe {
-        asm!(
-            "syscall",
-            inout("rax") SYSCALL_ACCEPT => ret,
-            in("rdi") fd,
-            in("rsi") sockaddr_in_ptr,
-            in("rdx") sizeof_sockaddr_in_ptr,
-        );
-    }
-    ret
-}
-
 fn htons(port: u16) -> u16 {
     port.to_be()
 }
 
-fn bind(fd: i32, port: u16) {
-    const SYSCALL_BIND: u64 = 49;
-    let sockaddr_in = SockaddrIn {
-        sin_family: AF_INET as _,
-        sin_port: htons(port),
-        // listen on 0.0.0.0
-        sin_addr: 0,
-        // padding
-        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0],
-    };
-    let sockaddr_in_ptr = &sockaddr_in as *const SockaddrIn;
-    let sizeof_sockaddr_in = size_of::<SockaddrIn>();
-    unsafe {
-        asm!(
-            "syscall",
-            in("rax") SYSCALL_BIND,
-            in("rdi") fd,
-            in("rsi") sockaddr_in_ptr,
-            in("rdx") sizeof_sockaddr_in,
-        )
-    }
-}
-
-fn listen(fd: i32) {
-    const SYSCALL_LISTEN: u64 = 50;
-    let backlog: i32 = 0;
-    unsafe {
-        asm!(
-            "syscall",
-            in("rax") SYSCALL_LISTEN,
-            in("rdi") fd,
-            in("rsi") backlog,
-        )
-    }
-}
-
-#[repr(C)]
-struct SockaddrIn {
-    sin_family: u16,
-    sin_port: u16,
-    // to listen on all ports, zero this out
-    sin_addr: u32,
-    sin_zero: [u8; 8],
-}
-
-// returns a file descriptor
-fn tcp_socket() -> i32 {
-    const SYSCALL_SOCKET: i32 = 41;
-    const SOCK_STREAM: i32 = 1;
-    const TYPE: i32 = 0; // not sure if this is right yet
-    let mut ret;
-    unsafe {
-        asm!(
-        "syscall",
-        inout("rax") SYSCALL_SOCKET => ret,
-        in("rdi") AF_INET,
-        in("rsi") SOCK_STREAM,
-        in("rdx") TYPE,
-        );
-    }
-    ret
-}
-
-fn exit(code: u8) -> ! {
-    const SYSCALL_EXIT: u64 = 60;
-    unsafe {
-        asm!(
-            "syscall",
-            in("rax") SYSCALL_EXIT,
-            in("dil") code,
-            options(noreturn)
-        )
-    }
-}
-
-fn write(fd: i32, s: &[u8]) {
-    const SYSCALL_WRITE: u64 = 1;
-    unsafe {
-        asm!(
-        "syscall",
-        in("rax") SYSCALL_WRITE,
-        // argument #1
-        in("rdi") fd,
-        // argument #2
-        in("rsi") s.as_ptr() as u64,
-        // argument #2
-        in("rdx") s.len() as u64,
-        )
-    }
-}
-
 fn print(s: &str) {
-    write(STDOUT, s.as_bytes());
+    linux::write(STDOUT, s.as_bytes());
 }
 
 #[panic_handler]
 fn panic(panic_info: &PanicInfo<'_>) -> ! {
     // TODO: print out panic.location.file, line_number, etc.
     const STDERR: i32 = 2;
-    write(STDERR, b"\n\n\npanic! at ");
+    linux::write(STDERR, b"\n\n\npanic! at ");
     match panic_info.location() {
         None => {}
         Some(loc) => {
-            write(STDERR, loc.file().as_bytes());
-            write(STDERR, b":");
+            linux::write(STDERR, loc.file().as_bytes());
+            linux::write(STDERR, b":");
             write_num(STDERR, loc.line() as _);
-            write(STDERR, b":");
+            linux::write(STDERR, b":");
             write_num(STDERR, loc.column() as _);
-            write(STDERR, b"\n");
+            linux::write(STDERR, b"\n");
         }
     }
-    exit(1);
+    linux::exit(1);
 }
